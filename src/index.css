@@ -1,0 +1,205 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* MapBox GL CSS */
+@import 'mapbox-gl/dist/mapbox-gl.css';
+
+@layer base {
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background-color: #0b1121;
+    color: #f1f5f9;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+  h1, h2, h3, h4 { font-family: 'Poppins', sans-serif; }
+}
+
+@layer components {
+  .glass-card {
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 1rem;
+  }
+  .glass-card-hover {
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 1rem;
+    transition: all 0.3s ease;
+  }
+  .glass-card-hover:hover {
+    background: rgba(255,255,255,0.09);
+    border-color: rgba(255,255,255,0.2);
+  }
+
+  .text-gradient {
+    background: linear-gradient(90deg, #60a5fa, #22d3ee);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .text-gradient-wide {
+    background: linear-gradient(90deg, #93c5fd, #22d3ee, #60a5fa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .btn-primary {
+    background: linear-gradient(135deg, #2563eb, #0891b2);
+    color: white;
+    font-weight: 600;
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.75rem;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 20px rgba(59,130,246,0.35);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+  }
+  .btn-primary:hover {
+    background: linear-gradient(135deg, #3b82f6, #06b6d4);
+    transform: scale(1.04);
+    box-shadow: 0 6px 25px rgba(59,130,246,0.45);
+  }
+
+  .btn-glass {
+    background: rgba(255,255,255,0.07);
+    backdrop-filter: blur(12px);
+    color: white;
+    font-weight: 600;
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(255,255,255,0.15);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+  }
+  .btn-glass:hover {
+    background: rgba(255,255,255,0.12);
+    transform: scale(1.04);
+  }
+
+  .btn-outline {
+    background: transparent;
+    color: white;
+    font-weight: 600;
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(255,255,255,0.3);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+  }
+  .btn-outline:hover {
+    border-color: #60a5fa;
+    color: #93c5fd;
+  }
+
+  .input-dark {
+    width: 100%;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: white;
+    border-radius: 0.75rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    font-family: 'Inter', sans-serif;
+  }
+  .input-dark::placeholder { color: rgba(148,163,184,0.5); }
+  .input-dark:focus {
+    border-color: rgba(59,130,246,0.5);
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+  }
+  .input-dark option { background: #1e293b; color: white; }
+
+  .section-dark  { @apply py-24 relative overflow-hidden; }
+  .section-alt   { @apply py-24 relative overflow-hidden bg-slate-900/50; }
+
+  /* ── Fleet media cards ─────────────────────────────────────────── */
+  .fleet-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 1.25rem;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 0.35s ease, box-shadow 0.35s ease, transform 0.35s ease;
+  }
+  .fleet-card:hover {
+    border-color: rgba(59,130,246,0.35);
+    box-shadow: 0 0 0 1px rgba(59,130,246,0.15), 0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(59,130,246,0.08);
+    transform: translateY(-4px);
+  }
+
+  /* Fleet CTA button */
+  .fleet-cta {
+    background: rgba(37,99,235,0.12);
+    border: 1px solid rgba(59,130,246,0.25);
+    color: #93c5fd;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease, transform 0.2s ease;
+  }
+  .fleet-cta:hover {
+    background: rgba(37,99,235,0.25);
+    border-color: rgba(59,130,246,0.5);
+    color: #bfdbfe;
+    transform: translateY(-1px);
+  }
+
+  /* Fleet bottom CTA strip */
+  .fleet-cta-strip {
+    background: linear-gradient(135deg, rgba(37,99,235,0.12) 0%, rgba(8,145,178,0.10) 100%);
+    border: 1px solid rgba(59,130,246,0.2);
+  }
+
+  /* line-clamp utility for description */
+  .line-clamp-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(80px);
+  opacity: 0.6;
+}
+
+/* Mapbox popup override */
+.mapboxgl-popup-content {
+  background: #1e293b;
+  color: #f1f5f9;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 0.75rem;
+  padding: 12px 16px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.mapboxgl-popup-tip { border-top-color: #1e293b !important; border-bottom-color: #1e293b !important; }
+.mapboxgl-popup-close-button { color: #94a3b8; }

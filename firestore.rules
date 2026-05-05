@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Leads rápidos (formulario de contacto) ──────────────────────────────
+    match /leads/{docId} {
+      allow create: if request.resource.data.keys().hasAll(['name', 'phone'])
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0
+                    && request.resource.data.phone is string
+                    && request.resource.data.phone.size() > 0;
+      allow read, update, delete: if false;
+    }
+
+    // ── Solicitudes detalladas de clientes (CRM) ─────────────────────────────
+    match /client_leads/{docId} {
+      allow create: if request.resource.data.keys().hasAll(['name', 'phone'])
+                    && request.resource.data.name is string
+                    && request.resource.data.phone is string;
+      allow read, update, delete: if false;
+    }
+
+    // ── Transportistas (ERP + Mapa) ──────────────────────────────────────────
+    // Read público: necesario para el mapa en tiempo real de la web
+    // Create: permite registro desde el formulario "Trabaja con nosotros"
+    // Update: permite actualizar ubicación (GPS / admin) y estado
+    match /drivers/{docId} {
+      allow create: if request.resource.data.keys().hasAll(['name', 'phone', 'truckType'])
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0
+                    && request.resource.data.phone is string
+                    && request.resource.data.truckType is string;
+
+      // Lectura pública para el mapa (filtramos isPublic en el cliente)
+      allow read: if true;
+
+      // Actualizaciones permitidas: ubicación (GPS/admin) y estado/visibilidad (admin)
+      allow update: if request.resource.data.diff(resource.data)
+                          .affectedKeys()
+                          .hasOnly(['location', 'lastLocationUpdate',
+                                    'status', 'isPublic', 'showInFleet',
+                                    'coverImage', 'coverVideo', 'features',
+                                    'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    // ── Default deny ─────────────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
