@@ -2,7 +2,23 @@ import fs from 'fs'
 import path from 'path'
 import { pool } from './db'
 
+async function waitForDb(retries = 20, delayMs = 3000): Promise<void> {
+  for (let i = 1; i <= retries; i++) {
+    try {
+      await pool.query('SELECT 1')
+      console.log('✓ DB reachable, running migrations...')
+      return
+    } catch (err) {
+      console.log(`  DB not ready (attempt ${i}/${retries}): ${(err as Error).message}`)
+      if (i === retries) throw new Error('DB unreachable after all retries')
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
+  }
+}
+
 async function migrate() {
+  await waitForDb()
+
   const migDir = path.join(__dirname, '..', 'migrations')
   const files = fs.readdirSync(migDir).filter((f) => f.endsWith('.sql')).sort()
 

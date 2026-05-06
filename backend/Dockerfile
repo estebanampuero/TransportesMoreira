@@ -22,5 +22,5 @@ COPY package.json ./
 
 EXPOSE 4000
 
-# Run migrations then start the server
+# Migrate waits for DB with retry, then server starts (also retries DB)
 CMD ["sh", "-c", "node dist/migrate.js && node dist/index.js"]
