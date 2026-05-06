@@ -56,15 +56,25 @@ app.use((_req, res) => res.status(404).json({ error: 'Not found' }))
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = Number(process.env.PORT) || 4000
 
-async function start() {
-  // Verify DB before accepting traffic
-  try {
-    await pool.query('SELECT 1')
-    console.log('✓ PostgreSQL connected')
-  } catch (err) {
-    console.error('✗ PostgreSQL connection failed:', (err as Error).message)
-    process.exit(1)
+async function waitForDb(retries = 15, delayMs = 3000): Promise<void> {
+  for (let i = 1; i <= retries; i++) {
+    try {
+      await pool.query('SELECT 1')
+      console.log('✓ PostgreSQL connected')
+      return
+    } catch (err) {
+      console.log(`  DB not ready (attempt ${i}/${retries}): ${(err as Error).message}`)
+      if (i === retries) {
+        console.error('✗ Could not connect to PostgreSQL after all retries')
+        process.exit(1)
+      }
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
   }
+}
+
+async function start() {
+  await waitForDb()
 
   const server = http.createServer(app)
   initWebSocket(server)
