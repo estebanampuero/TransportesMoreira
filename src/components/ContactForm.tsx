@@ -1,5 +1,5 @@
 import { useState, FormEvent } from 'react'
-import { saveLead } from '../lib/firebase'
+import { supabase } from '../lib/supabase'
 import { trackFormSubmit, trackWhatsAppClick, trackPhoneClick } from '../lib/analytics'
 import { SITE, buildWhatsAppUrl } from '../lib/seo'
 
@@ -19,7 +19,15 @@ export default function ContactForm() {
     if (!form.name || !form.phone) return
     setStatus('loading')
     try {
-      await saveLead(form)
+      const { error } = await supabase.from('leads').insert({
+        name: form.name,
+        phone: form.phone,
+        email: form.email || null,
+        message: form.message || null,
+        status: 'new',
+        source: 'web_form',
+      })
+      if (error) throw error
       trackFormSubmit()
       setStatus('success')
       setForm(INITIAL)

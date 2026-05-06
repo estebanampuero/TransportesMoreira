@@ -1,5 +1,4 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app'
-import { getFirestore, collection, addDoc, serverTimestamp, Firestore } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
 import { getAnalytics, Analytics, isSupported } from 'firebase/analytics'
 
@@ -14,7 +13,6 @@ const firebaseConfig = {
 }
 
 let app: FirebaseApp
-let db: Firestore
 let analytics: Analytics | null = null
 
 if (!getApps().length) {
@@ -23,27 +21,10 @@ if (!getApps().length) {
   app = getApps()[0]
 }
 
-db = getFirestore(app)
 export const storage = getStorage(app)
 
 isSupported().then((supported) => {
   if (supported) analytics = getAnalytics(app)
 })
 
-export interface LeadData {
-  name: string
-  phone: string
-  email: string
-  message: string
-}
-
-export async function saveLead(data: LeadData): Promise<void> {
-  await addDoc(collection(db, 'leads'), {
-    ...data,
-    createdAt: serverTimestamp(),
-    source: 'web_form',
-    url: window.location.href,
-  })
-}
-
-export { db, analytics }
+export { analytics }

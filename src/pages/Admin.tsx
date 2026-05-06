@@ -1,9 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import {
-  collection, query, orderBy, doc, updateDoc,
-  onSnapshot, Timestamp,
-} from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { supabase } from '../lib/supabase'
 import mapboxgl from 'mapbox-gl'
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN as string
@@ -18,26 +14,67 @@ const SESSION_KEY = 'tm_admin_auth'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Driver {
-  id: string
+  id: number
   name: string; phone: string; email: string
   truckType: string; truckPlate: string; capacity: string; description: string
-  location: { lat: number; lng: number } | null
-  lastLocationUpdate: Timestamp | null
+  lat: number | null; lng: number | null
+  lastLocationUpdate: string | null
   status: 'pending' | 'active' | 'inactive'
   isPublic: boolean
   showInFleet: boolean
-  coverImage?: string
-  coverVideo?: string
-  features?: string[]
+  coverImage: string; coverVideo: string
+  features: string[]
 }
-interface ClientLead {
-  id: string
+
+interface Lead {
+  id: number
   name: string; company: string; phone: string; email: string
-  transportType: string; origin: string; destination: string
-  date: string; length: string; width: string; height: string; weight: string
-  notes: string; photoUrls: string[]
+  cargoType: string; origin: string; destination: string
+  weight: string; message: string; photos: string[]
   status: 'new' | 'contacted' | 'closed' | 'lost'
-  createdAt: Timestamp | null
+  createdAt: string | null
+}
+
+function mapDriver(d: any): Driver {
+  const truck = Array.isArray(d.trucks) ? d.trucks[0] : d.trucks
+  const loc   = Array.isArray(d.locations_current) ? d.locations_current[0] : d.locations_current
+  return {
+    id:   d.id,
+    name: d.name,
+    phone:  d.phone  ?? '',
+    email:  d.email  ?? '',
+    truckType:  truck?.truck_type  ?? '',
+    truckPlate: truck?.truck_plate ?? '',
+    capacity:   truck?.capacity    ?? '',
+    description: truck?.description ?? '',
+    lat: loc?.lat ?? null,
+    lng: loc?.lng ?? null,
+    lastLocationUpdate: loc?.updated_at ?? null,
+    status:      d.status,
+    isPublic:    d.is_public,
+    showInFleet: d.show_in_fleet,
+    coverImage:  d.cover_image ?? '',
+    coverVideo:  d.cover_video ?? '',
+    features:    d.features    ?? [],
+  }
+}
+
+function mapLead(l: any): Lead {
+  return {
+    id:          l.id,
+    name:        l.name        ?? '',
+    company:     l.company     ?? '',
+    phone:       l.phone       ?? '',
+    email:       l.email       ?? '',
+    cargoType:   l.cargo_type  ?? '',
+    origin:      l.origin      ?? '',
+    destination: l.destination ?? '',
+    weight:      l.weight      ?? '',
+    message:     l.message     ?? '',
+    photos:      l.photos      ?? [],
+    status:      l.status,
+    createdAt:   l.created_at  ?? null,
+  }
 }
 
 // ─── App ─────────────────────────────────────────────────────────────────────
@@ -78,17 +115,41 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 type Tab = 'erp' | 'crm'
 function Dashboard({ onLogout }: { onLogout: () => void }) {
-  const [tab, setTab] = useState<Tab>('erp')
+  const [tab, setTab]         = useState<Tab>('erp')
   const [drivers, setDrivers] = useState<Driver[]>([])
-  const [leads, setLeads] = useState<ClientLead[]>([])
+  const [leads, setLeads]     = useState<Lead[]>([])
 
-  // Real-time subscriptions
   useEffect(() => {
-    const unsub1 = onSnapshot(query(collection(db, 'drivers'), orderBy('createdAt', 'desc')),
-      (s) => setDrivers(s.docs.map((d) => ({ id: d.id, ...d.data() } as Driver))))
-    const unsub2 = onSnapshot(query(collection(db, 'client_leads'), orderBy('createdAt', 'desc')),
-      (s) => setLeads(s.docs.map((d) => ({ id: d.id, ...d.data() } as ClientLead))))
-    return () => { unsub1(); unsub2() }
+    async function loadDrivers() {
+      const { data } = await supabase
+        .from('drivers')
+        .select('id, name, phone, email, status, is_public, show_in_fleet, cover_image, cover_video, features, trucks(truck_type, truck_plate, capacity, description), locations_current(lat, lng, updated_at)')
+        .order('created_at', { ascending: false })
+      if (data) setDrivers(data.map(mapDriver))
+    }
+
+    async function loadLeads() {
+      const { data } = await supabase
+        .from('leads')
+        .select('*')
+        .order('created_at', { ascending: false })
+      if (data) setLeads(data.map(mapLead))
+    }
+
+    loadDrivers()
+    loadLeads()
+
+    const ch1 = supabase.channel('admin-drivers')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'drivers' },         loadDrivers)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trucks' },          loadDrivers)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'locations_current' }, loadDrivers)
+      .subscribe()
+
+    const ch2 = supabase.channel('admin-leads')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeads)
+      .subscribe()
+
+    return () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2) }
   }, [])
 
   return (
@@ -107,7 +168,6 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               </button>
             ))}
           </div>
-          {/* Live indicator */}
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
             <span className="text-xs text-slate-400">Tiempo real</span>
@@ -127,28 +187,25 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 
 // ─── ERP ──────────────────────────────────────────────────────────────────────
 function ERPPanel({ drivers }: { drivers: Driver[] }) {
-  const [selected, setSelected] = useState<Driver | null>(null)
-  const [locModal, setLocModal] = useState<Driver | null>(null)
+  const [selected, setSelected]   = useState<Driver | null>(null)
+  const [locModal, setLocModal]   = useState<Driver | null>(null)
   const [mediaModal, setMediaModal] = useState<Driver | null>(null)
-  const [copied, setCopied] = useState<string | null>(null)
+  const [copied, setCopied]       = useState<string | null>(null)
   const mapContainer = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<mapboxgl.Map | null>(null)
-  const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map())
+  const mapRef       = useRef<mapboxgl.Map | null>(null)
+  const markersRef   = useRef<Map<number, mapboxgl.Marker>>(new Map())
 
   const togglePublic = (d: Driver) =>
-    updateDoc(doc(db, 'drivers', d.id), { isPublic: !d.isPublic, updatedAt: new Date() })
+    supabase.from('drivers').update({ is_public: !d.isPublic }).eq('id', d.id)
 
   const toggleStatus = (d: Driver) =>
-    updateDoc(doc(db, 'drivers', d.id), {
-      status: d.status === 'active' ? 'inactive' : 'active',
-      updatedAt: new Date(),
-    })
+    supabase.from('drivers').update({ status: d.status === 'active' ? 'inactive' : 'active' }).eq('id', d.id)
 
   const toggleShowInFleet = (d: Driver) =>
-    updateDoc(doc(db, 'drivers', d.id), { showInFleet: !d.showInFleet, updatedAt: new Date() })
+    supabase.from('drivers').update({ show_in_fleet: !d.showInFleet }).eq('id', d.id)
 
   const saveMedia = (d: Driver, data: { coverImage: string; coverVideo: string; features: string[] }) =>
-    updateDoc(doc(db, 'drivers', d.id), { ...data, updatedAt: new Date() })
+    supabase.from('drivers').update({ cover_image: data.coverImage, cover_video: data.coverVideo, features: data.features }).eq('id', d.id)
 
   const copyText = (text: string, key: string) => {
     navigator.clipboard.writeText(text)
@@ -156,7 +213,6 @@ function ERPPanel({ drivers }: { drivers: Driver[] }) {
     setTimeout(() => setCopied(null), 2000)
   }
 
-  // Admin map — all drivers with location
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return
     const map = new mapboxgl.Map({
@@ -171,16 +227,15 @@ function ERPPanel({ drivers }: { drivers: Driver[] }) {
     return () => { map.remove(); mapRef.current = null }
   }, [])
 
-  // Sync markers real-time
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
-    const ids = new Set(drivers.filter((d) => d.location).map((d) => d.id))
+    const ids = new Set(drivers.filter((d) => d.lat).map((d) => d.id))
     markersRef.current.forEach((m, id) => { if (!ids.has(id)) { m.remove(); markersRef.current.delete(id) } })
 
     drivers.forEach((d) => {
-      if (!d.location) return
+      if (!d.lat || !d.lng) return
       const color = d.isPublic && d.status === 'active' ? '#22c55e' : d.status === 'active' ? '#3b82f6' : '#64748b'
       const popup = new mapboxgl.Popup({ offset: 25, closeButton: false }).setHTML(`
         <div style="font-family:Inter,sans-serif">
@@ -191,28 +246,26 @@ function ERPPanel({ drivers }: { drivers: Driver[] }) {
       `)
 
       if (markersRef.current.has(d.id)) {
-        markersRef.current.get(d.id)!.setLngLat([d.location.lng, d.location.lat])
+        markersRef.current.get(d.id)!.setLngLat([d.lng, d.lat])
       } else {
-        const m = new mapboxgl.Marker({ color }).setLngLat([d.location.lng, d.location.lat]).setPopup(popup).addTo(map)
+        const m = new mapboxgl.Marker({ color }).setLngLat([d.lng, d.lat]).setPopup(popup).addTo(map)
         markersRef.current.set(d.id, m)
       }
     })
   }, [drivers])
 
-  // Stats
-  const active = drivers.filter((d) => d.status === 'active').length
-  const publicCount = drivers.filter((d) => d.isPublic && d.status === 'active').length
+  const active       = drivers.filter((d) => d.status === 'active').length
+  const publicCount  = drivers.filter((d) => d.isPublic && d.status === 'active').length
   const inFleetCount = drivers.filter((d) => d.showInFleet).length
 
   return (
     <div className="space-y-6">
-      {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           { label: 'Total registrados', val: drivers.length, color: 'text-gradient' },
-          { label: 'Activos', val: active, color: 'text-green-400' },
-          { label: 'En mapa web', val: publicCount, color: 'text-blue-400' },
-          { label: 'En flota web', val: inFleetCount, color: 'text-cyan-400' },
+          { label: 'Activos',           val: active,          color: 'text-green-400' },
+          { label: 'En mapa web',       val: publicCount,     color: 'text-blue-400'  },
+          { label: 'En flota web',      val: inFleetCount,    color: 'text-cyan-400'  },
         ].map((s) => (
           <div key={s.label} className="glass-card p-5 text-center">
             <p className={`font-display text-2xl font-bold ${s.color}`}>{s.val}</p>
@@ -221,7 +274,6 @@ function ERPPanel({ drivers }: { drivers: Driver[] }) {
         ))}
       </div>
 
-      {/* Map + legend */}
       <div className="glass-card overflow-hidden">
         <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
@@ -237,7 +289,6 @@ function ERPPanel({ drivers }: { drivers: Driver[] }) {
         <div ref={mapContainer} style={{ height: '360px' }} />
       </div>
 
-      {/* Table */}
       <div className="glass-card overflow-hidden">
         <div className="px-5 py-3 border-b border-white/10">
           <h3 className="text-sm font-semibold">Transportistas registrados</h3>
@@ -264,7 +315,7 @@ function ERPPanel({ drivers }: { drivers: Driver[] }) {
                   <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
                     <a href={`tel:${d.phone}`} className="hover:text-blue-400 transition">{d.phone}</a>
                   </td>
-                  <td className="px-4 py-3 text-slate-400 whitespace-nowrap text-xs">{d.truckType}</td>
+                  <td className="px-4 py-3 text-slate-400 whitespace-nowrap text-xs">{d.truckType || '—'}</td>
                   <td className="px-4 py-3 text-slate-500 text-xs">{d.truckPlate || '—'}</td>
                   <td className="px-4 py-3">
                     <button onClick={() => toggleStatus(d)}
@@ -279,46 +330,31 @@ function ERPPanel({ drivers }: { drivers: Driver[] }) {
                     </button>
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => togglePublic(d)}
+                    <button onClick={() => togglePublic(d)}
                       title={d.isPublic ? 'Visible en mapa web — clic para ocultar' : 'Oculto en mapa web — clic para mostrar'}
-                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${d.isPublic && d.status === 'active' ? 'bg-blue-600' : 'bg-slate-700'}`}
-                    >
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${d.isPublic && d.status === 'active' ? 'bg-blue-600' : 'bg-slate-700'}`}>
                       <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${d.isPublic && d.status === 'active' ? 'translate-x-4' : 'translate-x-0.5'}`} />
                     </button>
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => toggleShowInFleet(d)}
+                    <button onClick={() => toggleShowInFleet(d)}
                       title={d.showInFleet ? 'Visible en sección Flota — clic para quitar' : 'No aparece en sección Flota — clic para agregar'}
-                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${d.showInFleet ? 'bg-cyan-600' : 'bg-slate-700'}`}
-                    >
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${d.showInFleet ? 'bg-cyan-600' : 'bg-slate-700'}`}>
                       <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${d.showInFleet ? 'translate-x-4' : 'translate-x-0.5'}`} />
                     </button>
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => copyText(d.id, d.id)}
+                    <button onClick={() => copyText(String(d.id), String(d.id))}
                       title="Copiar Driver ID para integración GPS"
-                      className="text-xs px-2 py-1 glass-card hover:border-blue-500/30 transition flex items-center gap-1"
-                    >
-                      {copied === d.id ? '✓ copiado' : '📡 ID GPS'}
+                      className="text-xs px-2 py-1 glass-card hover:border-blue-500/30 transition flex items-center gap-1">
+                      {copied === String(d.id) ? '✓ copiado' : '📡 ID GPS'}
                     </button>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2">
-                      <button onClick={() => setSelected(d)}
-                        className="text-xs px-2.5 py-1 glass-card hover:border-blue-500/30 transition">
-                        Ver
-                      </button>
-                      <button onClick={() => setLocModal(d)}
-                        className="text-xs px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 rounded-lg hover:bg-cyan-500/20 transition whitespace-nowrap">
-                        📍 Ubicar
-                      </button>
-                      <button onClick={() => setMediaModal(d)}
-                        className="text-xs px-2.5 py-1 bg-purple-500/10 border border-purple-500/25 text-purple-300 rounded-lg hover:bg-purple-500/20 transition whitespace-nowrap">
-                        🖼 Ficha
-                      </button>
+                      <button onClick={() => setSelected(d)} className="text-xs px-2.5 py-1 glass-card hover:border-blue-500/30 transition">Ver</button>
+                      <button onClick={() => setLocModal(d)} className="text-xs px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 rounded-lg hover:bg-cyan-500/20 transition whitespace-nowrap">📍 Ubicar</button>
+                      <button onClick={() => setMediaModal(d)} className="text-xs px-2.5 py-1 bg-purple-500/10 border border-purple-500/25 text-purple-300 rounded-lg hover:bg-purple-500/20 transition whitespace-nowrap">🖼 Ficha</button>
                     </div>
                   </td>
                 </tr>
@@ -328,12 +364,11 @@ function ERPPanel({ drivers }: { drivers: Driver[] }) {
         </div>
       </div>
 
-      {/* GPS Integration guide */}
       <GPSIntegrationGuide drivers={drivers} onCopy={copyText} copied={copied} />
 
-      {selected && <DriverDetail driver={selected} onClose={() => setSelected(null)} onTogglePublic={togglePublic} onToggleStatus={toggleStatus} onToggleShowInFleet={toggleShowInFleet} />}
-      {locModal && <LocationUpdateModal driver={locModal} onClose={() => setLocModal(null)} />}
-      {mediaModal && <MediaFichaModal driver={mediaModal} onClose={() => setMediaModal(null)} onSave={(data: { coverImage: string; coverVideo: string; features: string[] }) => { saveMedia(mediaModal, data); setMediaModal(null) }} />}
+      {selected   && <DriverDetail driver={selected} onClose={() => setSelected(null)} onTogglePublic={togglePublic} onToggleStatus={toggleStatus} onToggleShowInFleet={toggleShowInFleet} />}
+      {locModal   && <LocationUpdateModal driver={locModal} onClose={() => setLocModal(null)} />}
+      {mediaModal && <MediaFichaModal driver={mediaModal} onClose={() => setMediaModal(null)} onSave={(data) => { saveMedia(mediaModal, data); setMediaModal(null) }} />}
     </div>
   )
 }
@@ -345,27 +380,20 @@ function GPSIntegrationGuide({ drivers, onCopy, copied }: {
   copied: string | null
 }) {
   const [open, setOpen] = useState(false)
-  const PROJECT_ID = 'transportesmoreira'
-  const API_KEY = import.meta.env.VITE_FIREBASE_API_KEY as string
+  const SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL  as string
+  const SUPABASE_KEY  = import.meta.env.VITE_SUPABASE_ANON_KEY as string
+  const endpoint = `${SUPABASE_URL}/rest/v1/locations_current`
 
-  const restEndpoint = (driverId: string) =>
-    `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/drivers/${driverId}?key=${API_KEY}&updateMask.fieldPaths=location&updateMask.fieldPaths=lastLocationUpdate`
-
-  const sampleBody = `{
-  "fields": {
-    "location": {
-      "mapValue": {
-        "fields": {
-          "lat": { "doubleValue": -41.4693 },
-          "lng": { "doubleValue": -72.9424 }
-        }
-      }
-    },
-    "lastLocationUpdate": {
-      "timestampValue": "${new Date().toISOString()}"
-    }
-  }
+  const sampleBody = (driverId: number | string) => `{
+  "driver_id": ${driverId},
+  "lat": -41.4693,
+  "lng": -72.9424
 }`
+
+  const sampleHeaders = `apikey: ${SUPABASE_KEY}
+Authorization: Bearer ${SUPABASE_KEY}
+Content-Type: application/json
+Prefer: resolution=merge-duplicates`
 
   return (
     <div className="glass-card overflow-hidden">
@@ -383,53 +411,45 @@ function GPSIntegrationGuide({ drivers, onCopy, copied }: {
       {open && (
         <div className="border-t border-white/10 p-5 space-y-6">
           <p className="text-sm text-slate-400">
-            Cada GPS dispositivo actualiza la ubicación del transportista enviando un <strong className="text-white">PATCH HTTP</strong> al endpoint de Firestore REST API. No se requiere SDK de Firebase en el dispositivo.
+            Cada GPS envía un <strong className="text-white">POST HTTP</strong> al endpoint de Supabase REST API con la posición del transportista. No se requiere SDK en el dispositivo.
           </p>
 
-          {/* Method 1: REST API */}
           <div>
-            <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-widest mb-3">Método 1 — REST API directa (Cualquier GPS con HTTP callback)</h4>
-            <div className="space-y-3">
-              <div>
-                <p className="text-xs text-slate-500 mb-1">Método HTTP: <code className="text-blue-300">PATCH</code></p>
-                <div className="bg-slate-950 rounded-lg p-3 text-xs font-mono text-green-300 break-all">
-                  {drivers.length > 0
-                    ? restEndpoint(drivers[0].id)
-                    : `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/drivers/{DRIVER_ID}?key=${API_KEY}&updateMask.fieldPaths=location&updateMask.fieldPaths=lastLocationUpdate`}
-                </div>
-              </div>
-              <div>
-                <p className="text-xs text-slate-500 mb-1">Body (JSON):</p>
-                <div className="bg-slate-950 rounded-lg p-3 text-xs font-mono text-green-300 relative">
-                  <pre className="whitespace-pre-wrap">{sampleBody}</pre>
-                  <button onClick={() => onCopy(sampleBody, 'body')}
-                    className="absolute top-2 right-2 text-xs px-2 py-0.5 bg-slate-800 rounded hover:bg-slate-700 transition text-slate-300">
-                    {copied === 'body' ? '✓' : 'copiar'}
-                  </button>
-                </div>
-              </div>
+            <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-widest mb-3">Endpoint — POST (upsert)</h4>
+            <div className="bg-slate-950 rounded-lg p-3 text-xs font-mono text-green-300 break-all">{endpoint}</div>
+          </div>
+
+          <div>
+            <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-widest mb-3">Headers</h4>
+            <div className="bg-slate-950 rounded-lg p-3 text-xs font-mono text-yellow-300 relative">
+              <pre className="whitespace-pre-wrap break-all">{sampleHeaders}</pre>
+              <button onClick={() => onCopy(sampleHeaders, 'headers')}
+                className="absolute top-2 right-2 text-xs px-2 py-0.5 bg-slate-800 rounded hover:bg-slate-700 transition text-slate-300">
+                {copied === 'headers' ? '✓' : 'copiar'}
+              </button>
             </div>
           </div>
 
-          {/* Method 2: Traccar */}
           <div>
-            <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-widest mb-3">Método 2 — Traccar (plataforma GPS open source)</h4>
-            <p className="text-xs text-slate-400 mb-2">Si usas Traccar, configura un "Action HTTP Request" en el servidor Traccar para llamar al endpoint de arriba cuando hay nueva posición.</p>
-            <div className="bg-slate-950 rounded-lg p-3 text-xs font-mono text-yellow-300">
-              {`# En traccar.xml — Event Forward\n<entry key='event.forward.url'>https://us-central1-${PROJECT_ID}.cloudfunctions.net/gpsUpdate</entry>`}
+            <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-widest mb-3">Body (JSON)</h4>
+            <div className="bg-slate-950 rounded-lg p-3 text-xs font-mono text-green-300 relative">
+              <pre className="whitespace-pre-wrap">{sampleBody(drivers[0]?.id ?? 1)}</pre>
+              <button onClick={() => onCopy(sampleBody(drivers[0]?.id ?? 1), 'body')}
+                className="absolute top-2 right-2 text-xs px-2 py-0.5 bg-slate-800 rounded hover:bg-slate-700 transition text-slate-300">
+                {copied === 'body' ? '✓' : 'copiar'}
+              </button>
             </div>
           </div>
 
-          {/* Driver IDs */}
           {drivers.length > 0 && (
             <div>
-              <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-widest mb-3">IDs de transportistas para configurar en cada GPS</h4>
+              <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-widest mb-3">IDs de transportistas</h4>
               <div className="space-y-2">
                 {drivers.map((d) => (
                   <div key={d.id} className="flex items-center gap-3 bg-slate-950 rounded-lg px-3 py-2">
                     <span className="text-sm text-white w-40 truncate flex-shrink-0">{d.name}</span>
-                    <code className="text-xs text-blue-300 flex-1 truncate">{d.id}</code>
-                    <button onClick={() => onCopy(d.id, `gps_${d.id}`)}
+                    <code className="text-xs text-blue-300 flex-1">{d.id}</code>
+                    <button onClick={() => onCopy(String(d.id), `gps_${d.id}`)}
                       className="text-xs px-2 py-0.5 bg-slate-800 rounded hover:bg-slate-700 transition text-slate-300 flex-shrink-0">
                       {copied === `gps_${d.id}` ? '✓' : 'copiar'}
                     </button>
@@ -451,9 +471,10 @@ function GPSIntegrationGuide({ drivers, onCopy, copied }: {
 // ─── Location Update Modal ─────────────────────────────────────────────────────
 function LocationUpdateModal({ driver, onClose }: { driver: Driver; onClose: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<mapboxgl.Map | null>(null)
-  const markerRef = useRef<mapboxgl.Marker | null>(null)
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(driver.location)
+  const mapRef       = useRef<mapboxgl.Map | null>(null)
+  const markerRef    = useRef<mapboxgl.Marker | null>(null)
+  const initLoc = driver.lat && driver.lng ? { lat: driver.lat, lng: driver.lng } : null
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(initLoc)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -461,14 +482,14 @@ function LocationUpdateModal({ driver, onClose }: { driver: Driver; onClose: () 
     const map = new mapboxgl.Map({
       container: containerRef.current,
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: driver.location ? [driver.location.lng, driver.location.lat] : [-72.9424, -41.4693],
-      zoom: driver.location ? 12 : 9,
+      center: initLoc ? [initLoc.lng, initLoc.lat] : [-72.9424, -41.4693],
+      zoom: initLoc ? 12 : 9,
     })
     map.addControl(new mapboxgl.GeolocateControl({ positionOptions: { enableHighAccuracy: true } }), 'top-right')
 
-    if (driver.location) {
+    if (initLoc) {
       markerRef.current = new mapboxgl.Marker({ color: '#3b82f6', draggable: true })
-        .setLngLat([driver.location.lng, driver.location.lat])
+        .setLngLat([initLoc.lng, initLoc.lat])
         .addTo(map)
       markerRef.current.on('dragend', () => {
         const { lng, lat } = markerRef.current!.getLngLat()
@@ -492,16 +513,18 @@ function LocationUpdateModal({ driver, onClose }: { driver: Driver; onClose: () 
 
     mapRef.current = map
     return () => { map.remove(); mapRef.current = null }
-  }, [driver.location])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const save = async () => {
     if (!coords) return
     setSaving(true)
-    await updateDoc(doc(db, 'drivers', driver.id), {
-      location: coords,
-      lastLocationUpdate: new Date(),
-      updatedAt: new Date(),
-    })
+    await supabase.from('locations_current').upsert({
+      driver_id:  driver.id,
+      lat:        coords.lat,
+      lng:        coords.lng,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'driver_id' })
     setSaving(false)
     onClose()
   }
@@ -521,11 +544,9 @@ function LocationUpdateModal({ driver, onClose }: { driver: Driver; onClose: () 
         </div>
         <div ref={containerRef} style={{ height: '340px' }} />
         <div className="px-5 py-4 border-t border-white/10 flex items-center justify-between">
-          {coords ? (
-            <p className="text-xs text-cyan-400">{coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}</p>
-          ) : (
-            <p className="text-xs text-slate-500">Ninguna ubicación seleccionada</p>
-          )}
+          {coords
+            ? <p className="text-xs text-cyan-400">{coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}</p>
+            : <p className="text-xs text-slate-500">Ninguna ubicación seleccionada</p>}
           <div className="flex gap-2">
             <button onClick={onClose} className="btn-glass text-xs px-4 py-2">Cancelar</button>
             <button onClick={save} disabled={!coords || saving} className="btn-primary text-xs px-4 py-2 disabled:opacity-50">
@@ -547,15 +568,15 @@ function DriverDetail({ driver: d, onClose, onTogglePublic, onToggleStatus, onTo
 }) {
   const mapRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (!mapRef.current || !d.location) return
+    if (!mapRef.current || !d.lat || !d.lng) return
     const map = new mapboxgl.Map({
       container: mapRef.current,
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: [d.location.lng, d.location.lat], zoom: 12,
+      center: [d.lng, d.lat], zoom: 12,
     })
-    new mapboxgl.Marker({ color: '#3b82f6' }).setLngLat([d.location.lng, d.location.lat]).addTo(map)
+    new mapboxgl.Marker({ color: '#3b82f6' }).setLngLat([d.lng, d.lat]).addTo(map)
     return () => map.remove()
-  }, [d.location])
+  }, [d.lat, d.lng])
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
@@ -578,7 +599,7 @@ function DriverDetail({ driver: d, onClose, onTogglePublic, onToggleStatus, onTo
             ))}
           {d.description && <p className="text-slate-400 bg-white/5 p-3 rounded-lg text-xs mt-2">{d.description}</p>}
         </div>
-        {d.location && <div ref={mapRef} className="w-full h-44 rounded-xl overflow-hidden border border-white/10 mb-4" />}
+        {d.lat && d.lng && <div ref={mapRef} className="w-full h-44 rounded-xl overflow-hidden border border-white/10 mb-4" />}
         <div className="flex gap-2 flex-wrap">
           <a href={`tel:${d.phone}`} className="btn-primary text-sm px-4 py-2">Llamar</a>
           <button onClick={() => onToggleStatus(d)}
@@ -603,13 +624,11 @@ function DriverDetail({ driver: d, onClose, onTogglePublic, onToggleStatus, onTo
 interface MediaFichaData { coverImage: string; coverVideo: string; features: string[] }
 
 function MediaFichaModal({ driver, onClose, onSave }: {
-  driver: Driver
-  onClose: () => void
-  onSave: (data: MediaFichaData) => void
+  driver: Driver; onClose: () => void; onSave: (data: MediaFichaData) => void
 }) {
-  const [coverImage, setCoverImage] = useState(driver.coverImage ?? '')
-  const [coverVideo, setCoverVideo] = useState(driver.coverVideo ?? '')
-  const [featuresRaw, setFeaturesRaw] = useState((driver.features ?? []).join(', '))
+  const [coverImage, setCoverImage] = useState(driver.coverImage)
+  const [coverVideo, setCoverVideo] = useState(driver.coverVideo)
+  const [featuresRaw, setFeaturesRaw] = useState(driver.features.join(', '))
   const [preview, setPreview] = useState(false)
 
   const handleSave = () => {
@@ -632,45 +651,28 @@ function MediaFichaModal({ driver, onClose, onSave }: {
         </div>
 
         <div className="p-5 space-y-5">
-          {/* Cover image */}
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">
               URL imagen de portada
               <span className="text-slate-500 font-normal ml-1">(local: /media/fleet/archivo.jpg · Firebase Storage URL)</span>
             </label>
-            <input
-              value={coverImage}
-              onChange={(e) => setCoverImage(e.target.value)}
-              placeholder="/media/fleet/tracto-camion.jpg"
-              className="input-dark text-xs"
-            />
+            <input value={coverImage} onChange={(e) => setCoverImage(e.target.value)} placeholder="/media/fleet/tracto-camion.jpg" className="input-dark text-xs" />
           </div>
 
-          {/* Cover video */}
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">
               URL video de portada <span className="text-slate-500 font-normal">(opcional — se reproduce al pasar el mouse)</span>
             </label>
-            <input
-              value={coverVideo}
-              onChange={(e) => setCoverVideo(e.target.value)}
-              placeholder="/media/fleet/tracto-camion.mp4"
-              className="input-dark text-xs"
-            />
+            <input value={coverVideo} onChange={(e) => setCoverVideo(e.target.value)} placeholder="/media/fleet/tracto-camion.mp4" className="input-dark text-xs" />
           </div>
 
-          {/* Features */}
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">
               Características <span className="text-slate-500 font-normal">(separadas por coma)</span>
             </label>
-            <textarea
-              value={featuresRaw}
-              onChange={(e) => setFeaturesRaw(e.target.value)}
-              rows={3}
+            <textarea value={featuresRaw} onChange={(e) => setFeaturesRaw(e.target.value)} rows={3}
               placeholder="Carrocería plana, Amarres industriales, Permiso cargas especiales"
-              className="input-dark text-xs resize-none"
-            />
+              className="input-dark text-xs resize-none" />
             {featuresRaw && (
               <div className="flex flex-wrap gap-1.5 mt-2">
                 {featuresRaw.split(',').map((f) => f.trim()).filter(Boolean).map((f) => (
@@ -680,13 +682,9 @@ function MediaFichaModal({ driver, onClose, onSave }: {
             )}
           </div>
 
-          {/* Preview */}
           {coverImage && (
             <div>
-              <button
-                onClick={() => setPreview(!preview)}
-                className="text-xs text-slate-400 hover:text-white transition flex items-center gap-1"
-              >
+              <button onClick={() => setPreview(!preview)} className="text-xs text-slate-400 hover:text-white transition flex items-center gap-1">
                 <svg className={`w-3.5 h-3.5 transition-transform ${preview ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                 {preview ? 'Ocultar' : 'Ver'} previsualización
               </button>
@@ -698,7 +696,7 @@ function MediaFichaModal({ driver, onClose, onSave }: {
             </div>
           )}
 
-          <div className="pt-2 border-t border-white/10 bg-blue-500/5 -mx-5 px-5 py-3 rounded-b-none text-xs text-slate-500">
+          <div className="pt-2 border-t border-white/10 bg-blue-500/5 -mx-5 px-5 py-3 text-xs text-slate-500">
             <strong className="text-slate-400">Opciones para subir imágenes:</strong>
             <ul className="mt-1 space-y-0.5 list-disc list-inside">
               <li>Coloca el archivo en <code className="text-blue-300">/public/media/fleet/</code> y usa <code className="text-blue-300">/media/fleet/nombre.jpg</code></li>
@@ -717,11 +715,11 @@ function MediaFichaModal({ driver, onClose, onSave }: {
 }
 
 // ─── CRM ──────────────────────────────────────────────────────────────────────
-function CRMPanel({ leads }: { leads: ClientLead[] }) {
-  const [selected, setSelected] = useState<ClientLead | null>(null)
+function CRMPanel({ leads }: { leads: Lead[] }) {
+  const [selected, setSelected] = useState<Lead | null>(null)
 
-  const updateStatus = (id: string, status: string) =>
-    updateDoc(doc(db, 'client_leads', id), { status, updatedAt: new Date() })
+  const updateStatus = (id: number, status: string) =>
+    supabase.from('leads').update({ status }).eq('id', id)
 
   const statusStyle: Record<string, string> = {
     new:       'bg-blue-500/15 border-blue-500/30 text-blue-300',
@@ -732,13 +730,12 @@ function CRMPanel({ leads }: { leads: ClientLead[] }) {
 
   return (
     <div className="space-y-6">
-      {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: 'Total', val: leads.length, c: 'text-gradient' },
-          { label: 'Nuevas', val: leads.filter((l) => l.status === 'new').length, c: 'text-blue-400' },
-          { label: 'Contactadas', val: leads.filter((l) => l.status === 'contacted').length, c: 'text-yellow-400' },
-          { label: 'Cerradas', val: leads.filter((l) => l.status === 'closed').length, c: 'text-green-400' },
+          { label: 'Total',        val: leads.length,                                       c: 'text-gradient'  },
+          { label: 'Nuevas',       val: leads.filter((l) => l.status === 'new').length,      c: 'text-blue-400'  },
+          { label: 'Contactadas',  val: leads.filter((l) => l.status === 'contacted').length, c: 'text-yellow-400' },
+          { label: 'Cerradas',     val: leads.filter((l) => l.status === 'closed').length,   c: 'text-green-400' },
         ].map((s) => (
           <div key={s.label} className="glass-card p-5 text-center">
             <p className={`font-display text-2xl font-bold ${s.c}`}>{s.val}</p>
@@ -755,14 +752,14 @@ function CRMPanel({ leads }: { leads: ClientLead[] }) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/10 text-slate-500 text-xs uppercase">
-                {['Nombre', 'Empresa', 'Teléfono', 'Origen → Destino', 'Tipo', 'Fecha', 'Estado', ''].map((h) => (
+                {['Nombre', 'Empresa', 'Teléfono', 'Origen → Destino', 'Tipo de carga', 'Estado', ''].map((h) => (
                   <th key={h} className="text-left px-4 py-3 font-medium whitespace-nowrap">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {leads.length === 0 ? (
-                <tr><td colSpan={8} className="text-center py-10 text-slate-500 text-sm">Sin solicitudes aún.</td></tr>
+                <tr><td colSpan={7} className="text-center py-10 text-slate-500 text-sm">Sin solicitudes aún.</td></tr>
               ) : leads.map((l) => (
                 <tr key={l.id} className="border-b border-white/5 hover:bg-white/3 transition-colors">
                   <td className="px-4 py-3 font-medium text-white whitespace-nowrap">{l.name}</td>
@@ -770,9 +767,8 @@ function CRMPanel({ leads }: { leads: ClientLead[] }) {
                   <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
                     <a href={`tel:${l.phone}`} className="hover:text-blue-400 transition">{l.phone}</a>
                   </td>
-                  <td className="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">{l.origin} → {l.destination}</td>
-                  <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{l.transportType || '—'}</td>
-                  <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{l.date || '—'}</td>
+                  <td className="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">{l.origin || '—'}{l.destination ? ` → ${l.destination}` : ''}</td>
+                  <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{l.cargoType || '—'}</td>
                   <td className="px-4 py-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full border ${statusStyle[l.status] ?? 'bg-white/5 border-white/15 text-slate-300'}`}>
                       {l.status}
@@ -795,6 +791,7 @@ function CRMPanel({ leads }: { leads: ClientLead[] }) {
           </table>
         </div>
       </div>
+
       {selected && (
         <LeadDetail
           lead={selected}
@@ -807,7 +804,7 @@ function CRMPanel({ leads }: { leads: ClientLead[] }) {
 }
 
 function LeadDetail({ lead: l, onClose, onStatusChange }: {
-  lead: ClientLead; onClose: () => void; onStatusChange: (s: string) => void
+  lead: Lead; onClose: () => void; onStatusChange: (s: string) => void
 }) {
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
@@ -820,21 +817,21 @@ function LeadDetail({ lead: l, onClose, onStatusChange }: {
           </button>
         </div>
         <div className="space-y-1.5 text-sm mb-4">
-          {([['Empresa', l.company], ['Teléfono', l.phone], ['Email', l.email], ['Tipo', l.transportType], ['Origen', l.origin], ['Destino', l.destination], ['Fecha', l.date], ['Dimensiones', [l.length, l.width, l.height].filter(Boolean).join(' × ') + (l.weight ? ` · ${l.weight} kg` : '')]] as [string, string][])
+          {([['Empresa', l.company], ['Teléfono', l.phone], ['Email', l.email], ['Tipo de carga', l.cargoType], ['Origen', l.origin], ['Destino', l.destination], ['Peso', l.weight ? `${l.weight} kg` : '']] as [string, string][])
             .filter(([, v]) => v)
             .map(([k, v]) => (
               <div key={k} className="flex gap-2">
-                <span className="text-slate-500 w-24 flex-shrink-0">{k}:</span>
+                <span className="text-slate-500 w-28 flex-shrink-0">{k}:</span>
                 <span className="text-white">{v}</span>
               </div>
             ))}
-          {l.notes && <p className="text-slate-400 bg-white/5 p-3 rounded-lg text-xs mt-2">{l.notes}</p>}
+          {l.message && <p className="text-slate-400 bg-white/5 p-3 rounded-lg text-xs mt-2 whitespace-pre-line">{l.message}</p>}
         </div>
-        {l.photoUrls?.length > 0 && (
+        {l.photos?.length > 0 && (
           <div className="mb-4">
-            <p className="text-xs text-slate-500 mb-2">Fotos ({l.photoUrls.length}):</p>
+            <p className="text-xs text-slate-500 mb-2">Fotos ({l.photos.length}):</p>
             <div className="flex gap-2 flex-wrap">
-              {l.photoUrls.map((url, i) => (
+              {l.photos.map((url, i) => (
                 <a key={i} href={url} target="_blank" rel="noopener noreferrer">
                   <img src={url} alt={`Foto ${i + 1}`} className="w-24 h-24 object-cover rounded-lg border border-white/15 hover:border-blue-500/50 transition" />
                 </a>

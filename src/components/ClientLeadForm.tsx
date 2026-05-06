@@ -1,7 +1,6 @@
 import { useState, useRef, FormEvent } from 'react'
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore'
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage'
-import { db } from '../lib/firebase'
+import { supabase } from '../lib/supabase'
 import { trackFormSubmit } from '../lib/analytics'
 import { STORAGE_PATHS } from '../lib/assets'
 
@@ -85,13 +84,28 @@ export default function ClientLeadForm() {
       }
 
       setUploadProgress('Registrando solicitud...')
-      await addDoc(collection(db, 'client_leads'), {
-        ...form,
-        photoUrls,
+      const extraParts: string[] = []
+      if (form.date) extraParts.push(`Fecha estimada: ${form.date}`)
+      if (form.length || form.width || form.height)
+        extraParts.push(`Dimensiones: ${form.length || '?'}m × ${form.width || '?'}m × ${form.height || '?'}m`)
+      if (form.notes) extraParts.push(`Notas: ${form.notes}`)
+      const msgText = extraParts.join('\n') || null
+
+      const { error } = await supabase.from('leads').insert({
+        name: form.name,
+        phone: form.phone,
+        email: form.email || null,
+        company: form.company || null,
+        cargo_type: form.transportType || null,
+        origin: form.origin,
+        destination: form.destination,
+        weight: form.weight || null,
+        message: msgText,
+        photos: photoUrls,
         status: 'new',
         source: 'web_form_crm',
-        createdAt: serverTimestamp(),
       })
+      if (error) throw error
 
       trackFormSubmit()
       setStatus('success')
