@@ -56,32 +56,43 @@ app.use((_req, res) => res.status(404).json({ error: 'Not found' }))
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = Number(process.env.PORT) || 4000
 
-async function waitForDb(retries = 15, delayMs = 3000): Promise<void> {
+let dbReady = false
+
+async function waitForDb(retries = 20, delayMs = 3000): Promise<void> {
   for (let i = 1; i <= retries; i++) {
     try {
       await pool.query('SELECT 1')
+      dbReady = true
       console.log('✓ PostgreSQL connected')
       return
     } catch (err) {
       console.log(`  DB not ready (attempt ${i}/${retries}): ${(err as Error).message}`)
       if (i === retries) {
-        console.error('✗ Could not connect to PostgreSQL after all retries')
-        process.exit(1)
+        console.error('✗ Could not connect to PostgreSQL after all retries — DB calls will fail')
+        return
       }
       await new Promise((r) => setTimeout(r, delayMs))
     }
   }
 }
 
-async function start() {
-  await waitForDb()
+// Override health to reflect DB state
+app.get('/ready', (_req, res) => {
+  if (dbReady) res.json({ ok: true, db: 'connected' })
+  else res.status(503).json({ ok: false, db: 'connecting' })
+})
 
+async function start() {
+  // Start HTTP server immediately so Traefik can route traffic
   const server = http.createServer(app)
   initWebSocket(server)
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`✓ API listening on port ${PORT}`)
   })
+
+  // Connect to DB in background — routes will return 503 if called before ready
+  waitForDb()
 }
 
 start()
